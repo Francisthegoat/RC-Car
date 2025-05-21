@@ -1,0 +1,28 @@
+/*
+ * File:   BUZZER.c
+ * Author: kazic
+ *
+ * Created on February 17, 2025, 5:43 PM
+ */
+
+
+#include <avr/io.h>
+
+int main(void) {
+    CCP = 0xd8; // Unlock protected I/O registers - pg 41
+    
+    CLKCTRL.OSCHFCTRLA = 0x14; // clock set to 8 MHZ 
+    while(CLKCTRL.MCLKSTATUS & 0x01){
+        // we want to generate a PWM waveform using TCA0 and pin PA0. The frequency shall be 1khz.
+    }
+    
+        TCA0.SINGLE.CTRLA = (0x01)<< 3 | 0x01 ; // Divide by 16 and enable periphral. 
+        TCA0.SINGLE.CTRLB = 0x03;               // Single-sloped PWM
+        TCA0.SINGLE.CTRLB |= 0x01 <<4 ;         // PA0 enable as Single slope PWM.
+        TCA0.SINGLE.PER = 2000;                  // frequency set to 1KHZ.
+        TCA0.SINGLE.CMP0 = 1000;                 // set 50% duty cycle.
+        
+        PORTA.DIRSET = 0x01;                    // set pin PA0 As an output.
+    while (1) {
+    }
+}
