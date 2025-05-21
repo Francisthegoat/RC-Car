@@ -1,0 +1,96 @@
+#include <avr/io.h>
+#include <avr/interrupt.h>
+
+//#define DUTY_80_PERCENT 1600  // 80% of 2000 (2000 * 0.8)
+#define DUTY_80_PERCENT 1000  // 50% of 2000 (2000 * 0.8)
+
+
+#define DUTY_50_PERCENT 500  // 30% of 2000
+//#define DUTY_50_PERCENT 1000  // 50% of 2000
+
+volatile uint8_t duty_high = 0;  // Toggle state flag
+
+void setup_pwm(uint8_t output_pin) {
+    // Configure TCA0 for PWM
+    TCA0.SINGLE.CTRLA = (0x01 << 3) | 0x01; // Enable PWM with prescaler /1
+    TCA0.SINGLE.CTRLB = TCA_SINGLE_WGMODE_SINGLESLOPE_gc | (1 << 4); // Single slope PWM, enable CMP0
+    TCA0.SINGLE.PER = 2000 - 1; // Set period
+    TCA0.SINGLE.CMP0 = duty_high ? DUTY_80_PERCENT : DUTY_50_PERCENT; // Set duty based on mode
+}
+
+int main(void) {
+    // 1. Unlock protected I/O registers
+    CCP = 0xd8;
+    
+    // 2. Set clock to 8MHz
+    CLKCTRL.OSCHFCTRLA = 0x14;
+    while(CLKCTRL.MCLKSTATUS & 0x01);
+    
+    // 3. Configure PD3, PD4, PD5 as inputs (external signals)
+    PORTD.DIRCLR = PIN3_bm | PIN4_bm | PIN5_bm;    // Set as inputs
+    PORTD.PIN3CTRL = PORT_PULLUPEN_bm; // Enable pullup (optional)
+    PORTD.PIN4CTRL = PORT_PULLUPEN_bm;
+    PORTD.PIN5CTRL = PORT_PULLUPEN_bm;
+    
+    // 4. Configure PD1 and PD2 as outputs for headlights (initially off)
+    PORTD.DIRSET = PIN1_bm | PIN2_bm;  // Set PD1 and PD2 as outputs
+    PORTD.OUTCLR = PIN1_bm | PIN2_bm; // Turn off headlights initially
+    
+    // 5. Enable pin change interrupt on PD5 for sports mode toggle
+    PORTD.PIN5CTRL |= PORT_ISC_RISING_gc; // Trigger only on rising edge
+    sei(); // Enable global interrupts
+
+    // Default PWM configuration (initially routed to PD0)
+    PORTMUX.TCAROUTEA = 0x01; // Default route PWM to PD0
+    PORTD.DIRSET = PIN0_bm;   // Set PD0 as output
+    setup_pwm(0x01);          // Initialize PWM with default settings
+
+    while (1) {
+        // Read input pins
+        uint8_t pd3_state = PORTD.IN & PIN3_bm;
+        uint8_t pd4_state = PORTD.IN & PIN4_bm;
+        
+        // Determine PWM output routing based on inputs
+        switch ((pd3_state ? 1 : 0) | (pd4_state ? 2 : 0)) {
+            case 1: // PD3 is high
+                PORTMUX.TCAROUTEA = 0x00; // Route PWM to PA0
+                PORTA.DIRSET = PIN0_bm;   // Set PA0 as output
+                setup_pwm(0x00);
+                break;
+                
+            case 2: // PD4 is high
+                PORTMUX.TCAROUTEA = 0x02; // Route PWM to PC0
+                PORTC.DIRSET = PIN0_bm;   // Set PC0 as output
+                setup_pwm(0x02);
+                break;
+                
+            default: // Neither PD3 nor PD4 is high - default to PD0
+                PORTMUX.TCAROUTEA = 0x01; // Route PWM to PD0
+                PORTD.DIRSET = PIN0_bm;   // Ensure PD0 is output
+                TCA0.SINGLE.CMP0 = 0;     // Disable PWM output
+                TCA0.SINGLE.CTRLB &= ~(1 << 4); // Disable PWM output
+                break;
+        }
+    }
+}
+
+// Interrupt Service Routine for PD5 rising edge (sports mode toggle)
+ISR(PORTD_PORT_vect) {
+    if (PORTD.INTFLAGS & PIN5_bm) {
+        if (PORTD.IN & PIN5_bm) { // Check if PD5 is HIGH
+            duty_high = !duty_high; // Toggle state
+            if (duty_high) {
+                // Sports mode - 80% duty cycle and headlights on
+                PORTD.OUTSET = PIN1_bm | PIN2_bm; // Turn on both headlights
+            } else {
+                // Normal mode - 50% duty cycle and headlights off
+                PORTD.OUTCLR = PIN1_bm | PIN2_bm; // Turn off both headlights
+            }
+            // Update PWM duty cycle immediately if PWM is active
+            if (TCA0.SINGLE.CTRLB & (1 << 4)) {
+                TCA0.SINGLE.CMP0 = duty_high ? DUTY_80_PERCENT : DUTY_50_PERCENT;
+            }
+        }
+        PORTD.INTFLAGS = PIN5_bm; // Clear interrupt flag
+    }
+}
