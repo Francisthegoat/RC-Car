@@ -1,0 +1,39 @@
+#include <avr/io.h>
+
+int x = 0b00000111;
+
+void setup_leds() {
+    PORTA.DIRSET = x;  // Set PA0, PA1, PA2 as outputs
+}
+
+int main(void) {
+    // Enable global interrupts.
+    SREG = 0b10000000;
+
+    // Comparator configuration
+    AC0.CTRLA = 0b00000111;  // Enable comparator with output enabled
+    AC0.MUXCTRL = 0b00000011; // Configure comparator input pins
+    VREF.ACREF = 0b00000101;  // Set reference voltage to 5V
+    AC0.DACREF = 0b10011010;  // Set threshold to 3V
+    AC0.INTCTRL = 0b00000001;  // Enable comparator interrupt
+    //AC0.STATUS = 0b00000001;
+    
+    setup_leds();
+    int count = 0;
+    while (1) {
+        if (count == 0){
+            if (AC0.STATUS & (0b00000001)) {
+                PORTA.OUTSET = x;  // Turn LEDs ON
+                count = 1;
+                AC0.STATUS = 0b00000001;
+            }
+        }
+        if (count == 1){
+            if (AC0.STATUS & (0b00000001)) {
+                PORTA.OUTCLR = x;
+                count = 0;
+                AC0.STATUS = 0b00000001;
+            }
+        }
+    }
+}
