@@ -1,0 +1,149 @@
+#define F_CPU 16000000UL  
+
+#include <avr/io.h>
+#include <util/delay.h>
+#include <avr/interrupt.h>
+#include <stdio.h>
+
+#define DISPLAY_ADDR 0x27
+#define TRIG_PIN 1       // PD1 as Trigger
+#define ECHO_PIN 2       // PD2 as Echo
+#define BUZZER_PIN 0     // PA0 as Buzzer (PWM)
+#define LED_PIN 1        // PA1 as LED
+#define NUM_SAMPLES 5    // Number of distance samples to average
+
+// I2C Communication with LCD
+void I2CWrite(uint8_t address, uint8_t data) {
+    TWI0.MADDR = address << 1;
+    while (!(TWI0.MSTATUS & 0b01000000)) { ; }
+    TWI0.MDATA = data;
+    while (!(TWI0.MSTATUS & 0b01000000)) { ; }
+    TWI0.MCTRLB = 0x03;
+    _delay_ms(1);
+}
+
+// LCD Commands
+void LCDWrite(uint8_t nibble, uint8_t rs, uint8_t rw, uint8_t ledOn) {
+    uint8_t data = (nibble << 4) | (ledOn << 3) | (rw << 1) | rs | 0x08;
+    I2CWrite(DISPLAY_ADDR, data);
+    data |= 0b00000100;
+    I2CWrite(DISPLAY_ADDR, data);
+    data &= 0b11111011;
+    I2CWrite(DISPLAY_ADDR, data);
+}
+
+void LCD_Init(void) {
+    _delay_ms(50);
+    LCDWrite(0b0011, 0, 0, 1);
+    _delay_ms(5);
+    LCDWrite(0b0011, 0, 0, 1);
+    _delay_ms(5);
+    LCDWrite(0b0011, 0, 0, 1);
+    _delay_ms(5);
+    LCDWrite(0b0010, 0, 0, 1);
+    LCDWrite(0b0010, 0, 0, 1);
+    LCDWrite(0b0000, 0, 0, 1);
+    LCDWrite(0b0000, 0, 0, 1);
+    LCDWrite(0b1110, 0, 0, 1);
+    LCDWrite(0b0000, 0, 0, 1);
+    LCDWrite(0b0110, 0, 0, 1);
+    LCDWrite(0b0000, 0, 0, 1);
+    LCDWrite(0b0001, 0, 0, 1);
+}
+
+void LCD_Print(char *str) {
+    while (*str) {
+        LCDWrite(*str >> 4, 1, 0, 1);
+        LCDWrite(*str & 0x0F, 1, 0, 1);
+        str++;
+        _delay_ms(50);
+    }
+}
+
+// Measure distance with Ultrasonic Sensor
+long Measure_Distance(void) {
+    PORTD.OUTCLR = (1 << TRIG_PIN);
+    _delay_us(2);
+    PORTD.OUTSET = (1 << TRIG_PIN);
+    _delay_us(10);
+    PORTD.OUTCLR = (1 << TRIG_PIN);
+
+    while (!(PORTD.IN & (1 << ECHO_PIN)));  // Wait for Echo HIGH
+    uint32_t start_time = 0;
+    while (PORTD.IN & (1 << ECHO_PIN)) start_time++;  // Count HIGH time
+
+    return (start_time * 0.034 / 2);  // Convert time to distance (cm)
+}
+
+// Display Distance on LCD
+void Display_Distance(long distance) {
+    char buffer[10];
+    sprintf(buffer, "%ld cm", distance);
+    LCDWrite(0b0000, 0, 0, 1);
+    LCDWrite(0b0001, 0, 0, 1);
+    LCD_Print(buffer);
+}
+
+// Initialize Buzzer with PWM
+void Init_Buzzer(void) {
+    PORTA.DIRSET = (1 << BUZZER_PIN);  // Set PA0 as output
+
+    // Set up PWM
+    TCA0.SINGLE.CTRLA = TCA_SINGLE_CLKSEL_DIV16_gc | TCA_SINGLE_ENABLE_bm;  // Clock divided by 16, enable TCA0
+    TCA0.SINGLE.CTRLB = TCA_SINGLE_WGMODE_SINGLESLOPE_gc | TCA_SINGLE_CMP0EN_bm; // Single-slope PWM, enable compare channel 0
+    TCA0.SINGLE.PER = 2000;  // Set period for 1 kHz frequency
+    TCA0.SINGLE.CMP0 = 0;    // Start with buzzer OFF
+}
+
+// Turn the buzzer ON
+void Buzzer_On(void) {
+    TCA0.SINGLE.CMP0 = 1000;  // 50% duty cycle
+}
+
+// Turn the buzzer OFF
+void Buzzer_Off(void) {
+    TCA0.SINGLE.CMP0 = 0;  // Set duty cycle to 0%
+}
+
+int main(void) {
+    // Clock Configuration
+    CCP = 0xd8;
+    CLKCTRL.OSCHFCTRLA = 0b00011100;
+    while (CLKCTRL.MCLKSTATUS & 0b00000001) { ; }
+
+    // I2C Setup
+    TWI0.MBAUD = 67;
+    TWI0.MCTRLA |= 0x01;
+    TWI0.MSTATUS = 0x01;
+
+    // Pin Configurations
+    PORTD.DIRSET = (1 << TRIG_PIN);  // TRIG as output
+    PORTD.DIRCLR = (1 << ECHO_PIN);  // ECHO as input
+    PORTA.DIRSET = (1 << BUZZER_PIN) | (1 << LED_PIN);  // Buzzer & LED as output
+
+    // Initialize Modules
+    LCD_Init();
+    Init_Buzzer();
+
+    while (1) {
+        long total_distance = 0;
+        for (int i = 0; i < NUM_SAMPLES; i++) {
+            total_distance += Measure_Distance();
+            _delay_ms(100);
+        }
+        long avg_distance = total_distance / NUM_SAMPLES;
+        Display_Distance(avg_distance);
+
+        // Buzzer & LED Control
+        if (avg_distance < 20) {
+            Buzzer_On();
+            PORTA.OUTSET = (1 << LED_PIN);
+        } else {
+            Buzzer_Off();
+            PORTA.OUTCLR = (1 << LED_PIN);
+        }
+
+        _delay_ms(1000);
+    }
+    return 0;
+}
