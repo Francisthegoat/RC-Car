@@ -1,0 +1,189 @@
+#define F_CPU 16000000UL
+
+#include <avr/io.h>
+#include <util/delay.h>
+#include <stdio.h>
+
+// LCD Configuration
+#define DISPLAY_ADDR 0x27
+#define TRIG_PIN 1       // PD1 as Trigger
+#define ECHO_PIN 2       // PD2 as Echo
+#define NUM_SAMPLES 5    // Number of distance samples to average
+
+// Servo Configuration
+//#define SERVO_PIN 4         // PA4 for servo control
+//#define SERVO_NEUTRAL 1500  // 1.5ms pulse
+//#define SERVO_LEFT 500      // 0.5ms pulse (left position)
+//#define SERVO_RIGHT 2500    // 2.5ms pulse (right position)
+//#define SERVO_PERIOD 20000  // 20ms period
+
+//#define SERVO_PIN 4         // PA4 for servo control
+//#define SERVO_NEUTRAL 1500  // 1.5ms pulse
+//#define SERVO_LEFT 1300      // 0.5ms pulse (left position)
+//#define SERVO_RIGHT 1800    // 2.5ms pulse (right position)
+//#define SERVO_PERIOD 20000  // 20ms period
+
+
+#define SERVO_PIN 4         // PA4 for servo control
+#define SERVO_NEUTRAL 1500  // 1.5ms pulse
+#define SERVO_LEFT 1150      // 0.5ms pulse (left position)
+#define SERVO_RIGHT 1850    // 2.5ms pulse (right position)
+#define SERVO_PERIOD 20000  // 20ms period
+// Critical I2C Write Function
+void I2CWrite(uint8_t address, uint8_t data) {
+    TWI0.MADDR = address << 1;
+    uint16_t timeout = 1000;
+    while (!(TWI0.MSTATUS & 0b01000000) && timeout--) { _delay_us(1); }
+    TWI0.MDATA = data;
+    timeout = 1000;
+    while (!(TWI0.MSTATUS & 0b01000000) && timeout--) { _delay_us(1); }
+    TWI0.MCTRLB = 0x03;
+    _delay_ms(1);
+}
+
+// LCD Functions
+void LCDWrite(uint8_t nibble, uint8_t rs, uint8_t rw, uint8_t ledOn) {
+    uint8_t data = (nibble << 4) | (ledOn << 3) | (rw << 1) | rs | 0x08;
+    I2CWrite(DISPLAY_ADDR, data);
+    data |= 0b00000100;
+    I2CWrite(DISPLAY_ADDR, data);
+    data &= 0b11111011;
+    I2CWrite(DISPLAY_ADDR, data);
+}
+
+void LCD_Init(void) {
+    _delay_ms(50);
+    LCDWrite(0b0011, 0, 0, 1);
+    _delay_ms(5);
+    LCDWrite(0b0011, 0, 0, 1);
+    _delay_ms(5);
+    LCDWrite(0b0011, 0, 0, 1);
+    _delay_ms(5);
+    LCDWrite(0b0010, 0, 0, 1);
+    LCDWrite(0b0010, 0, 0, 1);
+    LCDWrite(0b0000, 0, 0, 1);
+    LCDWrite(0b0000, 0, 0, 1);
+    LCDWrite(0b1110, 0, 0, 1);
+    LCDWrite(0b0000, 0, 0, 1);
+    LCDWrite(0b0110, 0, 0, 1);
+    LCDWrite(0b0000, 0, 0, 1);
+    LCDWrite(0b0001, 0, 0, 1);
+}
+
+void LCD_Print(char *str) {
+    while (*str) {
+        LCDWrite(*str >> 4, 1, 0, 1);
+        LCDWrite(*str & 0x0F, 1, 0, 1);
+        str++;
+        _delay_ms(50);
+    }
+}
+
+// Distance measurement (matches your working version)
+long Measure_Distance(void) {
+    PORTD.OUTCLR = (1 << TRIG_PIN);
+    _delay_us(2);
+    PORTD.OUTSET = (1 << TRIG_PIN);
+    _delay_us(10);
+    PORTD.OUTCLR = (1 << TRIG_PIN);
+    while (!(PORTD.IN & (1 << ECHO_PIN))) { ; }
+    uint32_t start_time = 0;
+    while (PORTD.IN & (1 << ECHO_PIN))
+        start_time++;
+    return (start_time * 0.034 / 2);
+}
+
+void Display_Distance(long distance) {
+    char buffer[10];
+    sprintf(buffer, "%ld cm", distance);
+    // Clear screen and home cursor
+    LCDWrite(0b0000, 0, 0, 1);
+    LCDWrite(0b0001, 0, 0, 1);
+    LCD_Print(buffer);
+}
+
+// Servo Control Functions
+void Servo_Init(void) {
+    // Configure TCA0 for servo timing (16MHz/64 = 250kHz)
+    TCA0.SINGLE.CTRLA = TCA_SINGLE_CLKSEL_DIV64_gc | TCA_SINGLE_ENABLE_bm;
+    TCA0.SINGLE.PER = 0xFFFF; // Maximum period
+    PORTA.DIRSET = (1 << SERVO_PIN); // Set PA4 as output
+}
+
+void Servo_UpdatePosition(unsigned int pulse_width) {
+    static uint32_t last_pulse = 0;
+    uint32_t current_time = TCA0.SINGLE.CNT;
+    
+    // Generate pulse every 20ms
+    if ((current_time - last_pulse) >= SERVO_PERIOD) {
+        PORTA.OUTSET = (1 << SERVO_PIN); // Start pulse
+        TCA0.SINGLE.CNT = 0; // Reset the timer
+        
+        // Wait for pulse width (converted from microseconds to timer ticks)
+        while (TCA0.SINGLE.CNT < (pulse_width * (F_CPU / 64 / 1000000.0)))
+            ;
+        
+        PORTA.OUTCLR = (1 << SERVO_PIN); // End pulse
+        last_pulse = current_time;
+    }
+}
+
+int main(void) {
+    unsigned int servo_position = SERVO_NEUTRAL;
+    
+    // Clock setup
+    CCP = 0xd8;
+    CLKCTRL.OSCHFCTRLA = 0b00011100; // 16MHz
+    while (CLKCTRL.MCLKSTATUS & 0b00000001) { ; }
+    
+    // I2C setup
+    TWI0.MBAUD = 67; // ~100kHz at 16MHz
+    TWI0.MCTRLA |= 0x01; // Enable TWI
+    TWI0.MSTATUS = 0x01; // Clear status
+    
+    // Pin setup:
+    // PD1: Trigger (output), PD2: Echo (input)
+    PORTD.DIRSET = (1 << TRIG_PIN);
+    PORTD.DIRCLR = (1 << ECHO_PIN);
+    
+    // Mode selector and servo inputs:
+    // PD4 used for distance mode; PD5 and PD6 for servo control.
+    PORTD.DIRCLR = (1 << 4); // PD4 as input (distance mode when high)
+    PORTD.DIRCLR = (1 << 5); // PD5 as input (servo left)
+    PORTD.DIRCLR = (1 << 6); // PD6 as input (servo right)
+    
+    // Initialize peripherals
+    Servo_Init();
+    LCD_Init();
+    
+    while (1) {
+        // If PD4 is high, run the distance measurement routine
+        if (PORTD.IN & (1 << 4)) {
+            long total_distance = 0;
+            for (int i = 0; i < NUM_SAMPLES; i++) {
+                total_distance += Measure_Distance();
+                _delay_ms(100);  // 100 ms delay between samples (as in working code)
+            }
+            long avg_distance = total_distance / NUM_SAMPLES;
+            Display_Distance(avg_distance);
+            _delay_ms(500);  // Wait 500 ms before taking the next reading
+        }
+        else {
+            // When PD4 is low, run servo control mode using PD5 and PD6
+            uint8_t inputs = PORTD.IN;
+            
+            if (inputs & (1 << 5)) {      // PD5 high: move left
+                servo_position = SERVO_LEFT;
+            } 
+            else if (inputs & (1 << 6)) { // PD6 high: move right
+                servo_position = SERVO_RIGHT;
+            } 
+            else {                      // Neutral position
+                servo_position = SERVO_NEUTRAL;
+            }
+            Servo_UpdatePosition(servo_position);
+        }
+    }
+    
+    return 0;
+}
