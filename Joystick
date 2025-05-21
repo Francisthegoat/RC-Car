@@ -1,0 +1,77 @@
+#define F_CPU 16000000UL
+#include <avr/io.h>
+#include <util/delay.h>
+
+// Joystick pins
+#define VRX_PIN 7       // PD7 (AIN6)
+#define VRY_PIN 6       // PD6 (AIN7)
+
+// Output pins
+#define Y_POS_PIN 4     // PA4 (+Y)
+#define Y_NEG_PIN 5     // PA5 (-Y)
+#define X_POS_PIN 6     // PA6 (+X)
+#define X_NEG_PIN 7     // PA7 (-X)
+
+// Thresholds
+#define CENTER 2048      // 12-bit center
+#define DEADZONE 200     // ~5% of range
+
+void adc_setup() {
+    VREF.ADC0REF = VREF_REFSEL_VDD_gc;
+    ADC0.CTRLC = ADC_PRESC_DIV64_gc;
+    ADC0.CTRLA = ADC_ENABLE_bm | ADC_RESSEL_12BIT_gc;
+}
+
+uint16_t get_adc(uint8_t channel) {
+    ADC0.MUXPOS = channel;
+    ADC0.COMMAND = ADC_STCONV_bm;
+    while (!(ADC0.INTFLAGS & ADC_RESRDY_bm));
+    ADC0.INTFLAGS = ADC_RESRDY_bm;
+    return ADC0.RES;
+}
+
+void update_outputs(int x_val, int y_val) {
+    // Default: ALL pins HIGH (no movement)
+    PORTA.OUTSET = (1 << Y_POS_PIN) | (1 << Y_NEG_PIN) |
+                   (1 << X_POS_PIN) | (1 << X_NEG_PIN);
+    
+    // Active directions pull LOW when moved
+    if (y_val > (CENTER + DEADZONE)) {
+        PORTA.OUTCLR = (1 << Y_POS_PIN);  // DOWN
+    } 
+    else if (y_val < (CENTER - DEADZONE)) {
+        PORTA.OUTCLR = (1 << Y_NEG_PIN);  // UP
+    }
+    
+    if (x_val > (CENTER + DEADZONE)) {
+        PORTA.OUTCLR = (1 << X_POS_PIN);  // RIGHT
+    } 
+    else if (x_val < (CENTER - DEADZONE)) {
+        PORTA.OUTCLR = (1 << X_NEG_PIN);  // LEFT
+    }
+}
+
+int main(void) {
+    // Clock setup
+    CCP = CCP_IOREG_gc;
+    CLKCTRL.MCLKCTRLA = CLKCTRL_CLKSEL_OSCHF_gc;
+    while (CLKCTRL.MCLKSTATUS & CLKCTRL_EXTS_bm);
+    
+    // Initialize ADC
+    adc_setup();
+    
+    // Configure outputs - start HIGH
+    PORTA.DIRSET = (1 << Y_POS_PIN) | (1 << Y_NEG_PIN) | 
+                   (1 << X_POS_PIN) | (1 << X_NEG_PIN);
+    PORTA.OUT = 0xFF;  // ALL pins HIGH initially
+    
+    // Configure joystick as inputs
+    PORTD.DIRCLR = (1 << VRX_PIN) | (1 << VRY_PIN);
+
+    while (1) {
+        uint16_t x_val = get_adc(ADC_MUXPOS_AIN6_gc);
+        uint16_t y_val = get_adc(ADC_MUXPOS_AIN7_gc);
+        update_outputs(x_val, y_val);
+        _delay_ms(50);
+    }
+}
