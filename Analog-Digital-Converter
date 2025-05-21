@@ -1,0 +1,70 @@
+/*
+ * File:   main.c
+ * Author: kazic
+ *
+ * Created on February 7, 2025, 1:43 PM
+ */
+
+#include <avr/io.h>
+
+void adc_setup() {
+    // Set PORTA pins 0, 1, and 2 as output for the LEDs.
+    PORTA.DIRSET = 0b00000111;
+    
+    // Enable global interrupts.
+    SREG = 0b10000000;
+
+    // Set the ADC reference level to VDD.
+    VREF.ADC0REF = 0b00000101;
+
+    // Enable the ADC interrupt.
+    ADC0.INTCTRL = 0b00000001;
+
+    // Select PD2 (AIN2) as the ADC input.
+    ADC0.MUXPOS = 0x02;
+
+    // Select minimum clock divide.
+    ADC0.CTRLC = 0x00;
+
+    // Select single-ended mode, 12-bit resolution, and free-running modes.
+    ADC0.CTRLA = 0b00000011;
+
+    // Start conversion.
+    ADC0.COMMAND = 0x01;
+}
+
+uint16_t get_adc() {
+    uint16_t result;
+    ADC0.COMMAND = 0b00000001; // Start conversion
+
+    // Wait for conversion to complete
+    while (!(ADC0.INTFLAGS & 0b00000001)) {}
+
+    // Combine RESH and RESL into a 16-bit result
+    result = (ADC0.RESH << 8) | ADC0.RESL;
+
+    return result;
+}
+
+int main(void) {
+    
+    adc_setup();
+    uint16_t result;
+
+    while (1) {
+        // Read ADC value
+        result = get_adc();
+
+        //Turn off all LEDs first
+        PORTA.OUTCLR = 0b00000111;
+
+        // Check thresholds and light appropriate LED
+        if (result > 2662) {  // 3.25V threshold
+            PORTA.OUTSET = 0b00000001; // Third LED
+        } else if (result > 1843) {  // 2.25V threshold
+            PORTA.OUTSET = 0b00000010; // Second LED
+        } else if (result > 1024) {  // 1.25V threshold
+            PORTA.OUTSET = 0b00000100; // First LED
+        }
+    }
+}
