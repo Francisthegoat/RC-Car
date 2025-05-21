@@ -1,0 +1,33 @@
+/*
+ * File:   square-wave.c
+ * Author: gmessier
+ *
+ * Created on November 21, 2021, 9:08 AM
+ */
+
+
+#include <avr/io.h>
+
+int main(void) {
+    
+    // The oscillator config registers are protected.  Writing this to
+    // CCP allows us to change them.
+    CCP = 0xd8;
+    
+    // Set the internal oscillator frequency.
+    CLKCTRL.OSCHFCTRLA = 0b00000000;
+    while( CLKCTRL.MCLKSTATUS & 0b00000001 ){
+        ;
+    }
+
+    // Configure our output pin.
+    PORTA.DIRSET = 0b0001
+            0000;
+
+    // Generate a "square wave" on our output pin.
+    while (1) {
+        PORTA.OUT &= 0b11101111;
+        PORTA.OUT |= 0b00010000;
+    }
+    
+}
